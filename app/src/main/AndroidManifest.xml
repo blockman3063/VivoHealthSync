@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 写 Health Connect 所需。
+         注意：光声明 WRITE_HEALTH_DATA 不够 —— Health Connect 是按**记录类型**逐项校验的，
+         必须把每种要写的类型权限都声明出来，否则运行时授权无效、写入报 SecurityException。 -->
+    <uses-permission android:name="android.permission.health.WRITE_HEALTH_DATA" />
+
+    <!-- 本机实测：广播与闹钟都拉不起已退出的进程（cached 应用限制），
+         所以必须用前台服务让进程存续，代价是一条静音通知。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA" />
+
+    <!-- 逐类型写权限（与 core/RecordType.kt 里 hcRecord 非空的类型一一对应） -->
+    <uses-permission android:name="android.permission.health.WRITE_ACTIVE_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.WRITE_BASAL_BODY_TEMPERATURE" />
+    <uses-permission android:name="android.permission.health.WRITE_BASAL_METABOLIC_RATE" />
+    <uses-permission android:name="android.permission.health.WRITE_BLOOD_GLUCOSE" />
+    <uses-permission android:name="android.permission.health.WRITE_BLOOD_PRESSURE" />
+    <uses-permission android:name="android.permission.health.WRITE_BODY_FAT" />
+    <uses-permission android:name="android.permission.health.WRITE_BODY_TEMPERATURE" />
+    <uses-permission android:name="android.permission.health.WRITE_BODY_WATER_MASS" />
+    <uses-permission android:name="android.permission.health.WRITE_BONE_MASS" />
+    <uses-permission android:name="android.permission.health.WRITE_CERVICAL_MUCUS" />
+    <uses-permission android:name="android.permission.health.WRITE_DISTANCE" />
+    <uses-permission android:name="android.permission.health.WRITE_ELEVATION_GAINED" />
+    <uses-permission android:name="android.permission.health.WRITE_EXERCISE" />
+    <uses-permission android:name="android.permission.health.WRITE_FLOORS_CLIMBED" />
+    <uses-permission android:name="android.permission.health.WRITE_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.WRITE_HEART_RATE_VARIABILITY" />
+    <uses-permission android:name="android.permission.health.WRITE_HEIGHT" />
+    <uses-permission android:name="android.permission.health.WRITE_HYDRATION" />
+    <uses-permission android:name="android.permission.health.WRITE_INTERMENSTRUAL_BLEEDING" />
+    <uses-permission android:name="android.permission.health.WRITE_LEAN_BODY_MASS" />
+    <uses-permission android:name="android.permission.health.WRITE_MENSTRUATION" />
+    <uses-permission android:name="android.permission.health.WRITE_MINDFULNESS" />
+    <uses-permission android:name="android.permission.health.WRITE_NUTRITION" />
+    <uses-permission android:name="android.permission.health.WRITE_OXYGEN_SATURATION" />
+    <uses-permission android:name="android.permission.health.WRITE_POWER" />
+    <uses-permission android:name="android.permission.health.WRITE_RESPIRATORY_RATE" />
+    <uses-permission android:name="android.permission.health.WRITE_RESTING_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.WRITE_SEXUAL_ACTIVITY" />
+    <uses-permission android:name="android.permission.health.WRITE_SKIN_TEMPERATURE" />
+    <uses-permission android:name="android.permission.health.WRITE_SLEEP" />
+    <uses-permission android:name="android.permission.health.WRITE_SPEED" />
+    <uses-permission android:name="android.permission.health.WRITE_STEPS" />
+    <uses-permission android:name="android.permission.health.WRITE_TOTAL_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.WRITE_WEIGHT" />
+    <!-- 名字不是 WRITE_VO2：HC 里最大摄氧量的权限叫 WRITE_VO2_MAX（少一个字母会导致
+         「全部已授予」的判断永远不成立，UI 一直显示未授权） -->
+    <uses-permission android:name="android.permission.health.WRITE_VO2_MAX" />
+
+
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.VHSync">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!--
+              Health Connect 授权流程的**必需**声明：它会在弹出授权页之前先跳到
+              应用自己的「用途说明」页面。缺了这段，HC 的 PermissionsActivity 会直接
+              抛 "App should support rationale intent, finishing!" 然后秒退 ——
+              表现就是点「去授权」毫无反应、且应用详情里也没法重新授权。
+              主页本身就是权限说明，所以复用 MainActivity 即可。
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity>
+
+        <!-- Hook 进程把读取到的数据推给主进程；token 校验，不用自定义权限
+             （com.vivo.health 是第三方应用，签名级自定义权限无法授予它） -->
+        <service
+            android:name=".core.SyncService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="保持与本机健康数据读取端的连接，按用户设定的间隔把健康数据同步到 Health Connect" />
+        </service>
+
+        <!-- 唤醒入口：读取端要推数据时发显式广播把它拉起来；
+             另有定时闹钟与开机自启兜底。 -->
+        <receiver
+            android:name=".core.WakeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="io.github.blockman3063.vhsync.action.WAKE" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 显式组件绑定通道：provider 被 HMA 之类隐藏时的备胎 -->
+        <service
+            android:name=".core.BridgeService"
+            android:exported="true" />
+
+        <provider
+            android:name=".core.SyncReceiverProvider"
+            android:authorities="${applicationId}.sync"
+            android:exported="true"
+            android:grantUriPermissions="false" />
+
+    </application>
+
+    <!-- Health Connect 权限引导页的系统入口 -->
+    <queries>
+        <package android:name="com.google.android.apps.healthdata" />
+    </queries>
+
+</manifest>

@@ -1,0 +1,31 @@
+# ── 探库工作区：含设备截图（健康数据正文）、数据库副本、探针原始日志、
+#    frida-server 二进制、node_modules、schema 产物。整个目录一律不上传。
+.probe/
+
+# ── Android / Gradle 构建产物
+build/
+app/build/
+.gradle/
+.kotlin/
+.cxx/
+.externalNativeBuild/
+captures/
+local.properties
+*.iml
+.idea/
+*.apk
+*.ap_
+*.aab
+*.dex
+
+# ── 任何本地数据文件、日志、密钥（防止误提交）
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.jks
+*.keystore
+keystore.properties
+
+# ── 工具会话数据
+.workbuddy/

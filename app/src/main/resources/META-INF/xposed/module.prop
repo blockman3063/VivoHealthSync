@@ -1,0 +1,8 @@
+id=io.github.blockman3063.vhsync
+name=VHSync
+version=0.1.0
+author=Mo
+description=把 vivo 健康数据同步进 Health Connect（个人自用，只读源库）
+minApiVersion=101
+targetApiVersion=102
+staticScope=true

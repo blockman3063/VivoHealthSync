@@ -1,0 +1,49 @@
+package io.github.blockman3063.vhsync.core
+
+import android.content.Context
+import android.content.Intent
+import android.util.Log
+
+/**
+ * 主进程 → 读取端的事件通知。
+ *
+ * 读取端被注入在 OPPO 健康进程里，没有自己的界面，用户的操作只能这样告知它。
+ *
+ * 用广播而不是轮询：早期版本每 5 秒跨进程查一次配置，虽然单次成本很低，
+ * 却把本应用永久钉在内存里（实测常驻 PSS 约 55 MB）。事件驱动后，本应用
+ * 在没有用户操作时可以被系统正常回收，需要写入时再由系统按需拉起数据接口。
+ *
+ * 广播内带口令，读取端校验后才处理，第三方伪造无效。
+ */
+object TriggerSender {
+
+    const val ACTION_SYNC_NOW = Ids.ACTION_SYNC_NOW
+    const val ACTION_CONFIG_CHANGED = Ids.ACTION_CONFIG_CHANGED
+    const val ACTION_PING = Ids.ACTION_PING
+    const val ACTION_PREVIEW = Ids.ACTION_PREVIEW
+
+    private const val TAG = "VHSyncTrigger"
+    private const val EXTRA_TOKEN = Ids.EXTRA_TOKEN
+
+    /** 读取端跑在 OPPO 健康进程里，广播要发给它。 */
+    private const val TARGET_PACKAGE = Ids.TARGET_PACKAGE
+
+    fun syncNow(context: Context) = send(context, ACTION_SYNC_NOW)
+
+    fun configChanged(context: Context) = send(context, ACTION_CONFIG_CHANGED)
+
+    fun ping(context: Context) = send(context, ACTION_PING)
+
+    /** M2：让读取端回报一份原始数据概况（不写 HC）。 */
+    fun preview(context: Context) = send(context, ACTION_PREVIEW)
+
+    private fun send(context: Context, action: String) {
+        runCatching {
+            context.sendBroadcast(
+                Intent(action)
+                    .setPackage(TARGET_PACKAGE)
+                    .putExtra(EXTRA_TOKEN, TokenStore.getOrCreate(context))
+            )
+        }.onFailure { Log.w(TAG, "发送 $action 失败", it) }
+    }
+}
