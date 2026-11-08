@@ -28,9 +28,10 @@ class HcClient(private val context: Context) {
     /**
      * 需要授予的权限：**只请求当前里程碑实际会写**的记录类型的写权限。
      *
-     * [RecordType.syncable] 是能力清单（M4 会逐类放开），拿它直接请求会在授权页
-     * 出现几十条永远用不上的条目，其中血压是用户明确判定「手表没这功能、不实现」的。
-     * M3 收窄到 [RecordType.active]，只有步数和心率两条。
+     * [RecordType.syncable] 是能力清单，拿它直接请求会在授权页出现几十条永远用不上的
+     * 条目，其中血压是用户明确判定「手表没这功能、不实现」的。
+     * 所以从 M3 起收窄到 [RecordType.active]：M3 是步数和心率两条，
+     * M4 加上距离、卡路里、睡眠、血氧、体重/身高、运动，共 9 条。
      */
     val requiredPermissions: Set<String> = buildSet {
         for (type in RecordType.active) {

@@ -82,11 +82,19 @@ enum class RecordType(val id: String, val hcRecord: String?, val label: String) 
          * **当前里程碑实际会写、并据此申请运行时权限**的类型。
          *
          * 一次只放开已定稿、已实测对账的类型。M3 只有步数与心率；
-         * M4 每接一类、在 docs/01 里定稿后，才往这里加一条。
+         * M4 接的六类（距离/卡路里/睡眠/血氧/体重/运动）加身高一条，
+         * 每一项都在 docs/05-M4-映射表.md 里有实测依据。
          * 直接拿 [syncable] 去请求权限会多出几十条用不上的授权项，
          * 其中血压是用户明确判定「手表无此功能、不实现」的，绝不能申请。
          */
-        val active: List<RecordType> = listOf(STEPS, HEART_RATE)
+        val active: List<RecordType> = listOf(
+            STEPS, HEART_RATE,
+            DISTANCE, ACTIVE_CALORIES,
+            SLEEP_SESSION,
+            BLOOD_OXYGEN,
+            WEIGHT, HEIGHT,
+            EXERCISE_SESSION,
+        )
 
         /** 按规则废弃的类型（UNKNOWN 除外）。 */
         val discarded: List<RecordType> = entries.filter { it.hcRecord == null && it != UNKNOWN }

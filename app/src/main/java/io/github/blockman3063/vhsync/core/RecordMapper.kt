@@ -6,6 +6,7 @@ import androidx.health.connect.client.records.BloodPressureRecord
 import androidx.health.connect.client.records.BodyFatRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ElevationGainedRecord
+import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.feature.ExperimentalMindfulnessSessionApi
 import androidx.health.connect.client.records.FloorsClimbedRecord
 import androidx.health.connect.client.records.HeartRateRecord
@@ -47,6 +48,7 @@ object RecordMapper {
     const val V_DISTANCE_M = "distance_m"
     const val V_CALORIES = "calories"
     const val V_MASS_KG = "mass_kg"
+    const val V_HEIGHT_M = "height_m"
     const val V_PERCENT = "percent"
     const val V_PRESSURE_SYS = "systolic"
     const val V_PRESSURE_DIA = "diastolic"
@@ -55,6 +57,12 @@ object RecordMapper {
     const val V_BREATHS_PER_MIN = "breaths_per_min"
     const val V_FLOORS = "floors"
     const val V_BMR = "bmr"
+
+    /** 运动记录用 metadata 传：exerciseType 是 HC 的 EXERCISE_TYPE_* 常量值。 */
+    const val M_EXERCISE_TYPE = "exercise_type"
+
+    /** 运动的展示名（vivo 的中文类型名），写进 ExerciseSessionRecord.title。 */
+    const val M_TITLE = "title"
 
     private val DEVICE = Device(Device.TYPE_PHONE, null, null)
 
@@ -129,7 +137,16 @@ object RecordMapper {
                 start, zo, Percentage(r.double(V_PERCENT)), metadata(cid))
 
             RecordType.HEIGHT -> HeightRecord(
-                start, zo, Length.meters(r.double("height_m")), metadata(cid))
+                start, zo, Length.meters(r.double(V_HEIGHT_M)), metadata(cid))
+
+            // 运动记录：只承载「什么运动、什么时候、多久」。
+            // 距离与卡路里走日汇总，不在这里重复写，否则 HC 会双重计入。
+            // segments / laps / route 一律留空 —— M4 不写轨迹（隐私单独评估）。
+            RecordType.EXERCISE_SESSION -> ExerciseSessionRecord(
+                start, zo, end, zo, metadata(cid),
+                r.metaInt(M_EXERCISE_TYPE, ExerciseSessionRecord.EXERCISE_TYPE_OTHER_WORKOUT),
+                r.metadata[M_TITLE], null,
+            )
 
             RecordType.RESPIRATORY_RATE -> RespiratoryRateRecord(
                 start, zo, r.double(V_BREATHS_PER_MIN), metadata(cid))

@@ -12,8 +12,11 @@ import io.github.blockman3063.vhsync.core.SyncRecord
  * vivo 健康库 -> SyncRecord -> 主进程。
  *
  * 「读什么」交给 QueryPlan，这里只负责取数、按 Binder 事务大小分批、递送。
- * M3 阶段只推步数和心率；睡眠等其余类型留在 M4 逐类接，绝不提前启用
- * 还按 OPPO 表结构写的 SleepBuilder。
+ * M3 推步数与心率，M4 追加距离、卡路里、睡眠、血氧、体重/身高、运动。
+ * 行级转换在 M4Mappers。
+ *
+ * [SleepBuilder] 仍是按 OPPO 表（DBSleepPiece）写的旧实现，**不要启用**：
+ * vivo 的睡眠在 WATCH_SLEEP_BEAN 的四个分段列表里，由 M4Mappers 处理。
  *
  * 主进程可能不在（本机不会因为数据接口被访问就去启动一个没在跑的应用），
  * 所以每次推送前先发唤醒广播、等数据接口可用再发。

@@ -41,17 +41,17 @@ vivo 健康国行版没有 Health Connect 集成，数据只存在它自己的�
 
 ## 同步哪些数据
 
-下表是**最终目标**清单，M3 阶段实际只实现前两项中的步数与心率：
+下表是**最终目标**清单。M3 完成步数与心率，M4 补全其余 7 类：
 
 | vivo 健康 | Health Connect | 阶段 |
 |---|---|---|
 | 步数 | `StepsRecord` | ✅ M3 |
 | 心率 | `HeartRateRecord` | ✅ M3 |
-| 距离 / 活动卡路里 | `DistanceRecord` / `ActiveCaloriesBurnedRecord` | M4 |
-| 睡眠（含深睡/浅睡/REM/清醒分段） | 带 `stages` 的 `SleepSessionRecord` | M4 |
-| 血氧 | `OxygenSaturationRecord` | M4 |
-| 体重 | `WeightRecord` | M4 |
-| 运动记录 | `ExerciseSessionRecord` | M4 |
+| 距离 / 活动卡路里 | `DistanceRecord` / `ActiveCaloriesBurnedRecord` | ✅ M4 |
+| 睡眠（含深睡/浅睡/REM/清醒分段） | 带 `stages` 的 `SleepSessionRecord` | ✅ M4 |
+| 血氧 | `OxygenSaturationRecord` | ✅ M4 |
+| 体重 / 身高 | `WeightRecord` / `HeightRecord` | ✅ M4 |
+| 运动记录 | `ExerciseSessionRecord` | ✅ M4 |
 
 Health Connect 没有对应类型的（压力、鼾声、呼吸暂停、HRV、睡眠评分）**按设计丢弃**，
 App 内会完整列出，不会静默丢弃。血压：设备不支持，不实现、不申请权限。
@@ -76,11 +76,13 @@ App 内会完整列出，不会静默丢弃。血压：设备不支持，不实�
 | M1 脚手架 | ✅ 完成（注入、取库、读表均已验证） | [M1 记录](docs/02-M1-脚手架.md) |
 | M2 读取端 | ✅ 完成（步数/心率经 IPC 到调试页，含真实数据对账） | [M2 记录](docs/03-M2-读取端.md) |
 | M3 写入端 | ✅ 完成（步数/心率真实写入 HC，与源库逐项对账一致，幂等已验证） | [M3 记录](docs/04-M3-写入端.md) |
-| M4 补全类型 | ⏳ 待做 | 睡眠/距离/卡路里/血氧/体重/运动 |
+| M4 补全类型 | ✅ 完成（9 类共 229 条真实写入，源库逐项对账不一致项 0，幂等已验证） | [M4 映射表与验收](docs/05-M4-映射表.md) |
 | M5 自动同步 | ⏳ 待做 | 增量 + 全窗口回填 + 后台保活 |
 
-> 当前进度 **M3 已完成**：步数、心率已真实写入 Health Connect，
-> 与 vivo 健康源库逐项对账一致（步数 2 个自然日逐日相符、心率 132 段 6013 样本），
-> 连续两次同步不新增记录、`clientRecordVersion` 单调更新，幂等成立。
-> 下一步是 M4 补全其余类型；但先要落定 M5 的架构改造（见
-> [M3 记录 §7](docs/04-M3-写入端.md)）。
+> 当前进度 **M4 已完成**：9 类数据（步数、心率、距离、活动卡路里、睡眠、血氧、
+> 体重、身高、运动）全部真实写入 Health Connect，并与 vivo 健康源库逐项对账：
+> 日聚合数值逐日相等、血氧 8/8 点命中、睡眠 29 晚分段逐类型全一致、运动 47/47 条起止一致。
+> 连续两次同步不新增记录、230 条 `clientRecordVersion` 全部单调 +1，幂等成立。
+>
+> 下一步是 M5 自动同步，需要先解决两件事：注入取库后**自动增量推送**、以及
+> 主进程不在时唤醒广播不生效的问题（见 [M4 §13](docs/05-M4-映射表.md)）。

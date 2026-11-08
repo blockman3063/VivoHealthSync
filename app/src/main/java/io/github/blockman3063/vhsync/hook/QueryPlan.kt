@@ -9,17 +9,23 @@ import org.json.JSONArray
 import java.util.TimeZone
 
 /**
- * M3：vivo 健康库 -> SyncRecord 的查询方案。
+ * vivo 健康库 -> SyncRecord 的查询方案。
  *
  * 和 OHSync 一样，**不硬编码表结构**：表名取自 sqlite_master，列名取自
  * PRAGMA table_info，SQL 用真实列名拼。目标表存在但列签名对不上时直接判失败，
  * 由 [QueryPlanResult.ok] 让 Pusher 停下报告，绝不降级猜测或吞错继续跑。
  *
- * 已确认的源语义（见 docs/01-映射设计草案.md，来自本机实测）：
+ * 已确认的源语义（见 docs/01 与 docs/05，全部来自本机实测）：
  *   DATE_STEP_COUNT_BEAN —— _id = 当天 00:00 绝对毫秒，VALUE = 全天步数
- *   WATCH_HEART_RATE     —— _id = 当天 00:00 绝对毫秒，
- *                           POINT_LIST = [{"timestamp":ms,"value":bpm}, ...]
+ *   DATE_DISTANCE_BEAN   —— 同上，VALUE = 米
+ *   DATE_CALORIE_BEAN    —— 同上，VALUE = 千卡（活动消耗，不含基础代谢）
+ *   WATCH_HEART_RATE     —— POINT_LIST = [{"timestamp":ms,"value":bpm}, ...]
+ *   WATCH_OXYGEN         —— POINT_LIST = [{"timestamp":ms,"value":0-100}, ...]
+ *   WATCH_SLEEP_BEAN     —— 四个 *_SLEEP_LIST，元素 {enterTime,exitTime} 绝对毫秒
+ *   WEIGHT_BEAN          —— WEIGHT 千克 / HEIGHT 厘米
+ *   SPORT_RECORD_BY_WATCH_BEAN —— TYPE 是 vivo 的运动编码，映射见 M4Mappers
  *
+ * 本类只写 SQL；行级转换在 [M4Mappers]（M4）与本文件的 stepRecords/hrRecords（M3）。
  * 全程只发 SELECT。日志只写条数与范围，不打印任何健康数据正文。
  */
 internal class TableSpec(
@@ -43,6 +49,14 @@ internal object QueryPlan {
     private const val T_STEPS = "DATE_STEP_COUNT_BEAN"
     private const val T_HR = "WATCH_HEART_RATE"
 
+    // ---- M4 ----
+    private const val T_DIST = "DATE_DISTANCE_BEAN"
+    private const val T_CAL = "DATE_CALORIE_BEAN"
+    private const val T_SLEEP = "WATCH_SLEEP_BEAN"
+    private const val T_SPO2 = "WATCH_OXYGEN"
+    private const val T_WEIGHT = "WEIGHT_BEAN"
+    private const val T_SPORT = "SPORT_RECORD_BY_WATCH_BEAN"
+
     private const val DAY_MS = 86_400_000L
     /** 绝对 10 分钟桶：以 epoch 为基准，不是「从首点起算 600 秒」，重解析时边界稳定。 */
     private const val BUCKET_MS = 600_000L
@@ -56,6 +70,19 @@ internal object QueryPlan {
 
     /** 一次最多读几行日级源数据，防止 POINT_LIST 大文本一次性灌进内存。 */
     private const val MAX_SOURCE_ROWS = 5
+
+    /**
+     * 睡眠回看天数。睡眠是稀疏事件（实测每晚 1~2 条），30 天约 30~60 行，
+     * 全量重拼代价可忽略；一次灌入两年反而会让首次同步变慢。
+     */
+    private const val SLEEP_DAYS = 30L
+
+    // 非日级表的行数上限。这些表行数本来就少（血氧 8 行、体重 1 行、运动 47 行），
+    // 设上限只为防御异常膨胀，不是常规截断。
+    private const val MAX_ROWS_SLEEP = 400
+    private const val MAX_ROWS_SPO2 = 5000
+    private const val MAX_ROWS_BODY = 50
+    private const val MAX_ROWS_SPORT = 5000
 
     private data class HrPoint(val ts: Long, val bpm: Double)
 
@@ -119,12 +146,216 @@ internal object QueryPlan {
             }
         }
 
+        // ---- 距离 / 卡路里（日聚合，与步数同构） ----
+        addDaily(byUpper, reader, out, problems, T_DIST, RecordType.DISTANCE,
+            RecordMapper.V_DISTANCE_M, "vivo-dist", lowerBound, now)
+        addDaily(byUpper, reader, out, problems, T_CAL, RecordType.ACTIVE_CALORIES,
+            RecordMapper.V_CALORIES, "vivo-cal", lowerBound, now)
+
+        // ---- 睡眠 ----
+        addSleep(byUpper, reader, out, problems, now)
+
+        // ---- 血氧 ----
+        addSpo2(byUpper, reader, out, problems, now)
+
+        // ---- 体重 + 身高（同一张表，两个 spec） ----
+        addBody(byUpper, reader, out, problems, now)
+
+        // ---- 运动 ----
+        addSport(byUpper, reader, out, problems, now)
+
         if (problems.isNotEmpty()) {
             Log.e(TAG, "源库结构对不上，放弃推送：$problems")
         } else {
-            Log.i(TAG, "M3 方案：${out.size} 类，窗口下界=$lowerBound")
+            Log.i(TAG, "M4 方案：${out.size} 类，日窗口下界=$lowerBound")
         }
         return QueryPlanResult(out, problems.isEmpty(), problems.joinToString("；"))
+    }
+
+    // ------------------------------------------------------------------ M4 分支
+
+    /** 日聚合表（距离、活动卡路里）与步数完全同构，只是 VALUE 语义不同。 */
+    private fun addDaily(
+        byUpper: Map<String, String>,
+        reader: TableReader,
+        out: MutableList<TableSpec>,
+        problems: MutableList<String>,
+        table: String,
+        type: RecordType,
+        valueKey: String,
+        sourcePrefix: String,
+        lowerBound: Long,
+        now: Long,
+    ) {
+        val actual = byUpper[table]
+        if (actual == null) {
+            problems += "缺少 $table"
+            return
+        }
+        val cols = bindColumns(reader, actual, "_ID", "VALUE")
+        if (cols == null) {
+            problems += "$actual 列签名不符（需要 _ID / VALUE）"
+            return
+        }
+        val t = actual.safeIdent()
+        val idCol = cols.getValue("_ID")
+        val valueCol = cols.getValue("VALUE")
+        out += TableSpec(
+            type,
+            "SELECT $idCol, $valueCol FROM `$t` " +
+                "WHERE CAST($idCol AS INTEGER) >= $lowerBound " +
+                "AND CAST($valueCol AS REAL) > 0 " +
+                "ORDER BY CAST($idCol AS INTEGER) DESC LIMIT $MAX_SOURCE_ROWS",
+        ) { row -> M4Mappers.dailyRecords(row, cols, type, valueKey, sourcePrefix, lowerBound, now) }
+    }
+
+    /**
+     * 睡眠：一行一次睡眠，四个分段列表拼成 stages。
+     *
+     * 坏行（`ENTER_TIME<=0` 或 `EXIT_TIME<=ENTER_TIME`）在 SQL 里就排除掉 ——
+     * 源库实测有 2 条这样的记录，不是我们该修的数据。
+     */
+    private fun addSleep(
+        byUpper: Map<String, String>,
+        reader: TableReader,
+        out: MutableList<TableSpec>,
+        problems: MutableList<String>,
+        now: Long,
+    ) {
+        val actual = byUpper[T_SLEEP]
+        if (actual == null) {
+            problems += "缺少 $T_SLEEP"
+            return
+        }
+        val needed = arrayOf(
+            "UUID", "ENTER_TIME", "EXIT_TIME", "ZONE_OFFSET",
+            "LIGHT_SLEEP_LIST", "DEEP_SLEEP_LIST", "REM_SLEEP_LIST", "AWAKE_SLEEP_LIST",
+        )
+        val cols = bindColumns(reader, actual, *needed)
+        if (cols == null) {
+            problems += "$actual 列签名不符（需要 ${needed.joinToString("/")}）"
+            return
+        }
+        val t = actual.safeIdent()
+        val enter = cols.getValue("ENTER_TIME")
+        val exit = cols.getValue("EXIT_TIME")
+        val lower = now - SLEEP_DAYS * DAY_MS
+        val select = needed.joinToString(", ") { cols.getValue(it) }
+        out += TableSpec(
+            RecordType.SLEEP_SESSION,
+            "SELECT $select FROM `$t` " +
+                "WHERE CAST($enter AS INTEGER) > 0 " +
+                "AND CAST($exit AS INTEGER) > CAST($enter AS INTEGER) " +
+                "AND CAST($enter AS INTEGER) >= $lower " +
+                "ORDER BY CAST($enter AS INTEGER) DESC LIMIT $MAX_ROWS_SLEEP",
+        ) { row -> M4Mappers.sleepRecords(row, cols, now) }
+    }
+
+    /** 血氧：每行 POINT_LIST 里是若干个测量点，一点一条记录。 */
+    private fun addSpo2(
+        byUpper: Map<String, String>,
+        reader: TableReader,
+        out: MutableList<TableSpec>,
+        problems: MutableList<String>,
+        now: Long,
+    ) {
+        val actual = byUpper[T_SPO2]
+        if (actual == null) {
+            problems += "缺少 $T_SPO2"
+            return
+        }
+        val cols = bindColumns(reader, actual, "_ID", "POINT_LIST")
+        if (cols == null) {
+            problems += "$actual 列签名不符（需要 _ID / POINT_LIST）"
+            return
+        }
+        val t = actual.safeIdent()
+        out += TableSpec(
+            RecordType.BLOOD_OXYGEN,
+            "SELECT ${cols.getValue("_ID")}, ${cols.getValue("POINT_LIST")} FROM `$t` " +
+                "ORDER BY CAST(${cols.getValue("_ID")} AS INTEGER) DESC LIMIT $MAX_ROWS_SPO2",
+        ) { row -> M4Mappers.spo2Records(row, cols, now) }
+    }
+
+    /** 体重与身高同表。HC 是两条独立记录类型，所以拆成两个 spec。 */
+    private fun addBody(
+        byUpper: Map<String, String>,
+        reader: TableReader,
+        out: MutableList<TableSpec>,
+        problems: MutableList<String>,
+        now: Long,
+    ) {
+        val actual = byUpper[T_WEIGHT]
+        if (actual == null) {
+            problems += "缺少 $T_WEIGHT"
+            return
+        }
+        val cols = bindColumns(reader, actual, "_ID", "WEIGHT", "HEIGHT")
+        if (cols == null) {
+            problems += "$actual 列签名不符（需要 _ID / WEIGHT / HEIGHT）"
+            return
+        }
+        val t = actual.safeIdent()
+        val idCol = cols.getValue("_ID")
+        val order = "ORDER BY CAST($idCol AS INTEGER) DESC LIMIT $MAX_ROWS_BODY"
+
+        out += TableSpec(
+            RecordType.WEIGHT,
+            "SELECT $idCol, ${cols.getValue("WEIGHT")} FROM `$t` " +
+                "WHERE CAST(${cols.getValue("WEIGHT")} AS REAL) > 0 $order",
+        ) { row -> M4Mappers.weightRecords(row, cols, now) }
+
+        out += TableSpec(
+            RecordType.HEIGHT,
+            "SELECT $idCol, ${cols.getValue("HEIGHT")} FROM `$t` " +
+                "WHERE CAST(${cols.getValue("HEIGHT")} AS REAL) > 0 $order",
+        ) { row -> M4Mappers.heightRecords(row, cols, now) }
+    }
+
+    /** 运动：一行一次运动。距离/卡路里不单独写，避免与日汇总重复计入。 */
+    private fun addSport(
+        byUpper: Map<String, String>,
+        reader: TableReader,
+        out: MutableList<TableSpec>,
+        problems: MutableList<String>,
+        now: Long,
+    ) {
+        val actual = byUpper[T_SPORT]
+        if (actual == null) {
+            problems += "缺少 $T_SPORT"
+            return
+        }
+        val needed = arrayOf("RTC_START_TIME", "RTC_END_TIME", "TYPE", "EID")
+        val cols = bindColumns(reader, actual, *needed)
+        if (cols == null) {
+            problems += "$actual 列签名不符（需要 ${needed.joinToString("/")}）"
+            return
+        }
+        val t = actual.safeIdent()
+        val start = cols.getValue("RTC_START_TIME")
+        val end = cols.getValue("RTC_END_TIME")
+        val select = needed.joinToString(", ") { cols.getValue(it) }
+        out += TableSpec(
+            RecordType.EXERCISE_SESSION,
+            "SELECT $select FROM `$t` " +
+                "WHERE CAST($start AS INTEGER) > 0 " +
+                "AND CAST($end AS INTEGER) > CAST($start AS INTEGER) " +
+                "ORDER BY CAST($start AS INTEGER) DESC LIMIT $MAX_ROWS_SPORT",
+        ) { row -> M4Mappers.sportRecords(row, cols, now) }
+    }
+
+    /**
+     * 把逻辑列名绑定到真实列名，缺任何一列就返回 null（由调用方记为结构不符）。
+     * 逻辑名与真实名大小写无关，与 [TableReader.columns] 的来源一致。
+     */
+    private fun bindColumns(reader: TableReader, table: String, vararg logical: String): Map<String, String>? {
+        val actual = reader.columns(table)
+        val out = HashMap<String, String>(logical.size * 2)
+        for (name in logical) {
+            val real = col(actual, name) ?: return null
+            out[name] = real
+        }
+        return out
     }
 
     /** 步数：一天一条 StepsRecord。当天没过完时 endTime 取现在，HC 拒收未来时间。 */
