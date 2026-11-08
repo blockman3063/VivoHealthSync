@@ -75,8 +75,18 @@ enum class RecordType(val id: String, val hcRecord: String?, val label: String) 
         private val byId = entries.associateBy { it.id }
         fun fromId(id: String): RecordType = byId[id] ?: UNKNOWN
 
-        /** 会写入 Health Connect 的类型。 */
+        /** 能力清单：Health Connect 里有对应记录类型、理论上能写的全部类型。 */
         val syncable: List<RecordType> = entries.filter { it.hcRecord != null }
+
+        /**
+         * **当前里程碑实际会写、并据此申请运行时权限**的类型。
+         *
+         * 一次只放开已定稿、已实测对账的类型。M3 只有步数与心率；
+         * M4 每接一类、在 docs/01 里定稿后，才往这里加一条。
+         * 直接拿 [syncable] 去请求权限会多出几十条用不上的授权项，
+         * 其中血压是用户明确判定「手表无此功能、不实现」的，绝不能申请。
+         */
+        val active: List<RecordType> = listOf(STEPS, HEART_RATE)
 
         /** 按规则废弃的类型（UNKNOWN 除外）。 */
         val discarded: List<RecordType> = entries.filter { it.hcRecord == null && it != UNKNOWN }

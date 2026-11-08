@@ -31,8 +31,8 @@ vivo 健康国行版没有 Health Connect 集成，数据只存在它自己的�
 ## 安装
 
 1. 安装 APK，**先打开一次主 App**（系统不允许启动从未打开过的应用的数据接口）
-2. 点「去授权」，勾选要授予的健康数据类型
-3. 在 LSPosed 里启用本模块，作用域**只勾 vivo 健康**
+2. 点「去授权」，勾选要授予的健康数据类型。当前阶段只有**步数、心率**两项
+3. 在 LSPosed 里启用本模块，作用域**只勾 vivo 健康**（不含 system，不需要重启手机）
 4. 打开一次 vivo 健康，让它把数据库准备好
 5. 回到主 App，点「立即同步」
 
@@ -41,17 +41,22 @@ vivo 健康国行版没有 Health Connect 集成，数据只存在它自己的�
 
 ## 同步哪些数据
 
-| vivo 健康 | Health Connect |
-|---|---|
-| 步数 / 距离 / 活动卡路里 | `StepsRecord` / `DistanceRecord` / `ActiveCaloriesBurnedRecord` |
-| 心率 | `HeartRateRecord` |
-| 睡眠（含深睡/浅睡/REM/清醒分段） | 带 `stages` 的 `SleepSessionRecord` |
-| 血氧 | `OxygenSaturationRecord` |
-| 体重 | `WeightRecord` |
-| 运动记录 | `ExerciseSessionRecord` |
+下表是**最终目标**清单，M3 阶段实际只实现前两项中的步数与心率：
+
+| vivo 健康 | Health Connect | 阶段 |
+|---|---|---|
+| 步数 | `StepsRecord` | ✅ M3 |
+| 心率 | `HeartRateRecord` | ✅ M3 |
+| 距离 / 活动卡路里 | `DistanceRecord` / `ActiveCaloriesBurnedRecord` | M4 |
+| 睡眠（含深睡/浅睡/REM/清醒分段） | 带 `stages` 的 `SleepSessionRecord` | M4 |
+| 血氧 | `OxygenSaturationRecord` | M4 |
+| 体重 | `WeightRecord` | M4 |
+| 运动记录 | `ExerciseSessionRecord` | M4 |
 
 Health Connect 没有对应类型的（压力、鼾声、呼吸暂停、HRV、睡眠评分）**按设计丢弃**，
-App 内会完整列出，不会静默丢弃。血压：设备不支持，不实现。
+App 内会完整列出，不会静默丢弃。血压：设备不支持，不实现、不申请权限。
+
+运行时只请求当前里程碑真正会写的类型（`RecordType.active`），不提前申请用不上的健康权限。
 
 ## 隐私
 
@@ -70,10 +75,12 @@ App 内会完整列出，不会静默丢弃。血压：设备不支持，不实�
 | 映射设计 | ✅ 草案已定稿（步数/心率/睡眠/运动口径均已对账） | [映射草案](docs/01-映射设计草案.md) |
 | M1 脚手架 | ✅ 完成（注入、取库、读表均已验证） | [M1 记录](docs/02-M1-脚手架.md) |
 | M2 读取端 | ✅ 完成（步数/心率经 IPC 到调试页，含真实数据对账） | [M2 记录](docs/03-M2-读取端.md) |
-| M3 写入端 | ⏳ 待做 | 步数、心率写入 HC + 幂等验证 |
+| M3 写入端 | ✅ 完成（步数/心率真实写入 HC，与源库逐项对账一致，幂等已验证） | [M3 记录](docs/04-M3-写入端.md) |
 | M4 补全类型 | ⏳ 待做 | 睡眠/距离/卡路里/血氧/体重/运动 |
 | M5 自动同步 | ⏳ 待做 | 增量 + 全窗口回填 + 后台保活 |
 
-> 当前是 **M2**：只读取、不写入 Health Connect。上表「同步哪些数据」是最终目标清单，
-> 不是现阶段已实现的功能。界面上请用「读取端预览」卡片验证读取链路，
-> 「立即同步」暂不产生写入。
+> 当前进度 **M3 已完成**：步数、心率已真实写入 Health Connect，
+> 与 vivo 健康源库逐项对账一致（步数 2 个自然日逐日相符、心率 132 段 6013 样本），
+> 连续两次同步不新增记录、`clientRecordVersion` 单调更新，幂等成立。
+> 下一步是 M4 补全其余类型；但先要落定 M5 的架构改造（见
+> [M3 记录 §7](docs/04-M3-写入端.md)）。

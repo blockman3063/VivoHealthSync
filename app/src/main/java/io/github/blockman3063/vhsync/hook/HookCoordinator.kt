@@ -50,9 +50,9 @@ class HookCoordinator(private val xposed: XposedInterface) {
         dbAccess.onDatabaseReady = { db ->
             reader.attach(db)
             reportTables()
-            // M1 阶段：只验证「能拿到库 + 能读出表名」，不推送任何数据。
-            // 映射未定稿前写 HC 只会产生脏数据，M3 再打开推送。
-            Log.i(TAG, "M1：取库成功，暂不推送")
+            // 取库成功后不自动推送：M3 起由用户点「立即同步」触发，
+            // 避免 vivo 健康一启动就往 Health Connect 里灌数据。
+            Log.i(TAG, "取库成功，等待同步请求")
         }
     }
 
@@ -103,7 +103,9 @@ class HookCoordinator(private val xposed: XposedInterface) {
 
         SyncTrigger.register(
             ctx,
-            onSyncNow = { Log.i(TAG, "收到同步请求：M2 阶段只读不写，暂不推送") },
+            // M3：用户点「立即同步」→ 真正读库并推送到主进程写 HC。
+            // 不走 Probe（探针输出很啰嗦），M3 一律取验证窗口。
+            onSyncNow = { pushNow(withProbe = false, incremental = false) },
             onConfigChanged = { Log.i(TAG, "收到配置变更") },
             onPing = { RemoteConfig.ping() },
             onPreview = { onPreviewRequested() },

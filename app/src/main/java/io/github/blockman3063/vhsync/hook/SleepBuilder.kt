@@ -7,6 +7,11 @@ import io.github.blockman3063.vhsync.core.SyncRecord
 import androidx.health.connect.client.records.SleepSessionRecord
 
 /**
+ * 【M3 未启用】OPPO 版睡眠拼装，保留作 M4 重写时的结构参考。
+ *
+ * Pusher 在 M3 不会调用它：vivo 的睡眠在 WATCH_SLEEP_BEAN 的四个
+ * *_SLEEP_LIST 里，跟下面的 DBSleepPiece 完全不是一套结构。
+ *
  * 把 OPPO 的睡眠分段拼成 Health Connect 的 SleepSessionRecord（含 stages）。
  *
  * DBSleepPiece 是一段一行（start_timestamp / end_timestamp / type），

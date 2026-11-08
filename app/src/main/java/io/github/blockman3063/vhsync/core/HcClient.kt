@@ -26,13 +26,14 @@ class HcClient(private val context: Context) {
         }
 
     /**
-     * 需要授予的权限：每种记录类型的**写**权限。
+     * 需要授予的权限：**只请求当前里程碑实际会写**的记录类型的写权限。
      *
-     * 只请求写：VHSync 只往 Health Connect 写，不读别的应用写的健康数据。
-     * 少请求一半权限，授权界面也短一半。
+     * [RecordType.syncable] 是能力清单（M4 会逐类放开），拿它直接请求会在授权页
+     * 出现几十条永远用不上的条目，其中血压是用户明确判定「手表没这功能、不实现」的。
+     * M3 收窄到 [RecordType.active]，只有步数和心率两条。
      */
     val requiredPermissions: Set<String> = buildSet {
-        for (type in RecordType.syncable) {
+        for (type in RecordType.active) {
             val kclass = hcRecordKClass(type) ?: continue
             runCatching { HealthPermission.getWritePermission(kclass) }
                 .getOrNull()?.let { add(it) }
@@ -56,8 +57,7 @@ class HcClient(private val context: Context) {
      *
      * 判据是**平台层权限**，不是 Health Connect 内部的授权记录：
      * 两者会不一致（比如应用更新时 HC 会撤销内部记录，但平台权限仍在），
-     * 而真正决定写入成败的是平台权限。用 HC 的内部记录会让界面显示「未授权」
-     * 却实际写入成功，误导用户。
+     * 而真正决定写入成败的是平台权限。
      */
     fun isWriteGranted(): Boolean {
         val ctx = context
@@ -77,10 +77,11 @@ class HcClient(private val context: Context) {
      *
      * 幂等性依赖 Health Connect 对 clientRecordId 的 upsert 语义：同一应用、
      * 同一记录类型、同一 clientRecordId 再次写入会覆盖旧记录，前提是
-     * clientRecordVersion 不小于已存版本 —— 所以这里用当前毫秒当版本号，
-     * 保证每次写入都是"更新"而不是被丢弃。
+     * clientRecordVersion 不小于已存版本 —— 所以 MetadataFactory 用当前毫秒
+     * 当版本号，保证每次写入都是「更新」而不是被丢弃。
      *
-     * 这条语义需要装到设备上实测确认，代码先按此实现。
+     * **这条语义必须装到设备上实测确认**（见 docs/04-M3-写入端.md 的验收作业单），
+     * 代码先按此实现；不看日志就宣布幂等通过是不允许的。
      */
     suspend fun write(record: Record) = writeAll(listOf(record))
 
@@ -93,20 +94,14 @@ class HcClient(private val context: Context) {
         records.chunked(BATCH).forEach { chunk -> c.insertRecords(chunk) }
     }
 
-    /**
-     * 删除本应用写入的全部记录。
-     *
-     * 用途：早期版本没带 clientRecordId，同一份数据被反复插入产生了大量重复，
-     * 需要一次清干净再重同步。只删自己的（dataOriginFilter 限定本包名），
-     * 不碰其他应用写的数据。
-     */
+    /** 删除本应用写入的全部记录（只删自己写的，不碰其他应用的数据）。 */
     suspend fun deleteAllMine(): Int {
         val c = client ?: return 0
         var deleted = 0
-        for (type in RecordType.syncable) {
+        for (type in RecordType.active) {
             val kclass = hcRecordKClass(type) ?: continue
             runCatching {
-                // 这个重载只删「调用方应用自己写入的」指定类型记录，不会碰到别的应用。
+                // 这个重载只删「调用方应用自己写入的」指定类型记录。
                 // TimeRangeFilter 没有 all()，用一个覆盖全部时间的大区间代替。
                 c.deleteRecords(kclass, TimeRangeFilter.between(EPOCH, FAR_FUTURE))
                 deleted++
@@ -133,7 +128,11 @@ class HcClient(private val context: Context) {
             java.time.LocalDate.of(2100, 1, 1).atStartOfDay(java.time.ZoneOffset.UTC).toInstant()
         const val PROVIDER = "com.google.android.apps.healthdata"
 
-        fun clientRecordId(type: RecordType, sourceKey: String) = "ohsync:${type.id}:$sourceKey"
+        /**
+         * 幂等键。`vhsync:` 前缀从 M3 首次写入起固定，之后**不能改** ——
+         * 改前缀等于换了一批新主键，旧记录不会被覆盖，HC 里会留下一整套重复数据。
+         */
+        fun clientRecordId(type: RecordType, sourceKey: String) = "vhsync:${type.id}:$sourceKey"
 
         /** hcRecord 存的是类名，反射拿 KClass；拿不到就跳过该类型。 */
         @Suppress("UNCHECKED_CAST")

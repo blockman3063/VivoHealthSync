@@ -14,12 +14,14 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.health.READ_HEALTH_DATA" />
 
-    <!-- 逐类型写权限（与 core/RecordType.kt 里 hcRecord 非空的类型一一对应） -->
+    <!-- 逐类型写权限。
+         这里是「能力声明」，运行时真正请求的是 core/RecordType.kt 的 RecordType.active
+         （M3 只有步数与心率）。血压已按用户结论判定不实现，故不声明、也不请求；
+         M4 逐类放开时再按需补齐，绝不提前申请用不上的健康权限。 -->
     <uses-permission android:name="android.permission.health.WRITE_ACTIVE_CALORIES_BURNED" />
     <uses-permission android:name="android.permission.health.WRITE_BASAL_BODY_TEMPERATURE" />
     <uses-permission android:name="android.permission.health.WRITE_BASAL_METABOLIC_RATE" />
     <uses-permission android:name="android.permission.health.WRITE_BLOOD_GLUCOSE" />
-    <uses-permission android:name="android.permission.health.WRITE_BLOOD_PRESSURE" />
     <uses-permission android:name="android.permission.health.WRITE_BODY_FAT" />
     <uses-permission android:name="android.permission.health.WRITE_BODY_TEMPERATURE" />
     <uses-permission android:name="android.permission.health.WRITE_BODY_WATER_MASS" />
@@ -54,8 +56,25 @@
     <uses-permission android:name="android.permission.health.WRITE_VO2_MAX" />
 
 
+    <!--
+      android:forceQueryable="true" —— 必需，不是可选项。
+
+      Android 11+ 的包可见性会拦「跨应用访问 provider/service」：调用方
+      （这里是 com.vivo.health）如果没在 <queries> 里声明本应用，AMS 的
+      AppsFilter 就会把本应用的 provider 解析结果过滤成 null，客户端表现是
+      IllegalArgumentException: Unknown authority ...vhsync.sync（实测 2026-11-08）。
+
+      注意 QUERY_ALL_PACKAGES 救不了：它只影响「列出已安装应用」，不改变
+      filterAppAccess 对跨应用组件访问的判断。而 vivo 健康的 manifest 我们
+      改不了，只能由**被访问方**自己声明 forceQueryable 来豁免过滤
+      （AppsFilter.shouldFilterApplication 里 mForceQueryable 含被查询 uid 时直接放行）。
+
+      代价：本应用对其它应用「可见」。本应用本来就 export 了 provider 与
+      bridge service（都带 token 校验），可见性不是新的攻击面。
+    -->
     <application
         android:allowBackup="false"
+        android:forceQueryable="true"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.VHSync">

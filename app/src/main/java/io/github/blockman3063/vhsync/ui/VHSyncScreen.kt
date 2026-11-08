@@ -310,9 +310,8 @@ private fun ChipRow(
 }
 
 /**
- * M2 调试卡：证明「注入 → 取库 → 查表 → 跨进程回传」这条链路是通的。
- *
- * 这一阶段**不写 Health Connect**，只看条数和时间范围。要写入得等映射定稿。
+ * 读取端预览卡：只读地看一眼源库的条数与时间范围，确认注入链路是否贯通。
+ * 这一步本身不触发同步、不写 Health Connect；写入由上面的「立即同步」负责。
  */
 @Composable
 private fun PreviewCard(ctx: android.content.Context) {
@@ -323,8 +322,8 @@ private fun PreviewCard(ctx: android.content.Context) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("读取端预览", style = MaterialTheme.typography.titleMedium)
             Text(
-                "从 vivo 健康库里只读地取一次步数和心率的原始条数，用来确认读取链是否贯通。" +
-                    "本阶段不写入 Health Connect。",
+                "从 vivo 健康库里只读地取一次步数和心率的原始条数与时间范围，" +
+                    "用来确认读取链是否贯通。这一步不写入 Health Connect。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline,
             )
@@ -398,13 +397,20 @@ private fun clock(ms: Long): String =
 
 /** 会同步哪些数据；以及需要时清除本应用写入的数据。 */
 @Composable
-private fun DataCard() {    val synced = RecordType.syncable
+private fun DataCard() {
+    // 只列当前里程碑真正会写的类型，不列能力清单，避免界面说同步几十类、实际只写两类。
+    val synced = RecordType.active
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("同步的数据（共 ${synced.size} 类）", style = MaterialTheme.typography.titleMedium)
+            Text("本阶段同步的数据（共 ${synced.size} 类）", style = MaterialTheme.typography.titleMedium)
             Text(
                 synced.joinToString("、") { it.label },
                 style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "其余类型会在后续里程碑逐类实测对账后再接入；Health Connect 无对应类型的数据见下方清单。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
             )
             Text(
                 "数据来源：vivo 健康数据库。读取在 vivo 健康进程内完成，只做查询，不修改它的任何数据。",
