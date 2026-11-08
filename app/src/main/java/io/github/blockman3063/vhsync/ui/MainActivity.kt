@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
+import io.github.blockman3063.vhsync.core.KeepAlive
 import io.github.blockman3063.vhsync.core.Settings
 import io.github.blockman3063.vhsync.core.SyncEngine
 import io.github.blockman3063.vhsync.core.SyncService
@@ -16,7 +17,12 @@ class MainActivity : ComponentActivity() {
         SyncEngine.get(this).restoreStatus(this)
         TokenStore.getOrCreate(this)
         // 常驻服务是后台同步的前提（见 SyncService 的说明）
-        if (Settings.keepAlive(this)) SyncService.start(this)
+        if (Settings.keepAlive(this)) {
+            SyncService.start(this)
+            // M5：同步改成「vivo 健康一写库就推」，用户平时不会打开本应用，
+            // 所以要一次性把电池优化豁免拿到，否则前台服务会被系统顺手清掉。
+            KeepAlive.requestExemptionIfNeeded(this)
+        }
         setContent { MaterialTheme { VHSyncScreen() } }
     }
 }

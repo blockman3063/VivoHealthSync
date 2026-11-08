@@ -235,15 +235,15 @@ private fun IntervalCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("同步设置", style = MaterialTheme.typography.titleMedium)
 
-            Text("自动同步间隔", style = MaterialTheme.typography.bodyMedium)
+            Text("兜底检查间隔", style = MaterialTheme.typography.bodyMedium)
             ChipRow(
                 options = Settings.INTERVAL_OPTIONS,
                 selected = interval,
                 onSelect = onInterval,
             )
             Text(
-                if (interval == 0) "只在点「立即同步」时才推送。"
-                else "每 $interval 分钟自动检查一次新数据。",
+                "数据一变就会自动同步（vivo 健康写库后约 10 秒）。这个间隔只是兜底：" +
+                    "万一漏掉写信号，也会每隔这么久比一次。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline,
             )
@@ -271,8 +271,9 @@ private fun IntervalCard(
                     Text("保持后台运行", style = MaterialTheme.typography.bodyMedium)
                     Text(
                         if (keepAlive) {
-                            "会常驻一个轻量进程并显示一条静音通知。关闭后系统不会主动" +
-                                "拉起本应用，自动同步将失效，只能打开应用时手动同步。"
+                            "常驻一个轻量进程（一条静音通知），vivo 健康一写库就能自动同步，" +
+                                "不需要打开本应用。建议同时在系统设置里允许「自启动」、" +
+                                "并把本应用加入电池优化白名单，否则系统可能把服务清掉。"
                         } else {
                             "已关闭：自动同步不会生效，只能在本应用里手动同步。"
                         },

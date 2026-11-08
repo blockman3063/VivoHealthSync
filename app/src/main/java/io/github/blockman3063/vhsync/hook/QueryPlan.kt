@@ -87,10 +87,12 @@ internal object QueryPlan {
     private data class HrPoint(val ts: Long, val bpm: Double)
 
     /**
-     * @param incremental M3 阶段一律取最近 2 天窗口，此参数暂不生效（M5 接增量时启用）。
+     * @param only 只构建这些类型的 spec。
+     *   M5 的自动同步按「源库哪张表变了」决定推什么，心率变了就只推心率，
+     *   不必把 9 类 229 条全部重读重写一遍。
+     *   null 表示全量（用户点「立即同步」、或首次建立基线时用）。
      */
-    @Suppress("UNUSED_PARAMETER")
-    fun forTables(reader: TableReader, incremental: Boolean = false): QueryPlanResult {
+    fun forTables(reader: TableReader, only: Set<RecordType>? = null): QueryPlanResult {
         val byUpper = reader.tableNames().associateBy { it.uppercase() }
         val out = ArrayList<TableSpec>()
         val problems = ArrayList<String>()
@@ -100,7 +102,10 @@ internal object QueryPlan {
         // 直接用 now - N*86400000 会落在当天中间，边界上的那行可能被漏掉。
         val lowerBound = localDayStart(now) - (VERIFY_DAYS - 1) * DAY_MS
 
+        fun want(t: RecordType) = only == null || only.contains(t)
+
         // ---- 步数 ----
+        if (want(RecordType.STEPS)) {
         val stepsTable = byUpper[T_STEPS]
         if (stepsTable == null) {
             problems += "缺少 $T_STEPS"
@@ -124,8 +129,10 @@ internal object QueryPlan {
                 ) { row -> stepRecords(row, idCol, valueCol, now, lowerBound) }
             }
         }
+        }
 
         // ---- 心率 ----
+        if (want(RecordType.HEART_RATE)) {
         val hrTable = byUpper[T_HR]
         if (hrTable == null) {
             problems += "缺少 $T_HR"
@@ -145,32 +152,39 @@ internal object QueryPlan {
                 ) { row -> hrRecords(row, pointCol, lowerBound) }
             }
         }
+        }
 
         // ---- 距离 / 卡路里（日聚合，与步数同构） ----
         addDaily(byUpper, reader, out, problems, T_DIST, RecordType.DISTANCE,
-            RecordMapper.V_DISTANCE_M, "vivo-dist", lowerBound, now)
+            RecordMapper.V_DISTANCE_M, "vivo-dist", lowerBound, now, only)
         addDaily(byUpper, reader, out, problems, T_CAL, RecordType.ACTIVE_CALORIES,
-            RecordMapper.V_CALORIES, "vivo-cal", lowerBound, now)
+            RecordMapper.V_CALORIES, "vivo-cal", lowerBound, now, only)
 
         // ---- 睡眠 ----
-        addSleep(byUpper, reader, out, problems, now)
+        addSleep(byUpper, reader, out, problems, now, only)
 
         // ---- 血氧 ----
-        addSpo2(byUpper, reader, out, problems, now)
+        addSpo2(byUpper, reader, out, problems, now, only)
 
         // ---- 体重 + 身高（同一张表，两个 spec） ----
-        addBody(byUpper, reader, out, problems, now)
+        addBody(byUpper, reader, out, problems, now, only)
 
         // ---- 运动 ----
-        addSport(byUpper, reader, out, problems, now)
+        addSport(byUpper, reader, out, problems, now, only)
 
         if (problems.isNotEmpty()) {
             Log.e(TAG, "源库结构对不上，放弃推送：$problems")
         } else {
-            Log.i(TAG, "M4 方案：${out.size} 类，日窗口下界=$lowerBound")
+            Log.i(TAG, "查询方案：${out.size} 类" +
+                (if (only == null) "（全量）" else "（按变化：${only.joinToString { it.label }}）") +
+                "，日窗口下界=$lowerBound")
         }
         return QueryPlanResult(out, problems.isEmpty(), problems.joinToString("；"))
     }
+
+    /** 「这次要不要查这个类型」。only=null 表示全量。 */
+    private fun wantIn(only: Set<RecordType>?, type: RecordType) =
+        only == null || only.contains(type)
 
     // ------------------------------------------------------------------ M4 分支
 
@@ -186,7 +200,9 @@ internal object QueryPlan {
         sourcePrefix: String,
         lowerBound: Long,
         now: Long,
+        only: Set<RecordType>?,
     ) {
+        if (!wantIn(only, type)) return
         val actual = byUpper[table]
         if (actual == null) {
             problems += "缺少 $table"
@@ -221,7 +237,9 @@ internal object QueryPlan {
         out: MutableList<TableSpec>,
         problems: MutableList<String>,
         now: Long,
+        only: Set<RecordType>?,
     ) {
+        if (!wantIn(only, RecordType.SLEEP_SESSION)) return
         val actual = byUpper[T_SLEEP]
         if (actual == null) {
             problems += "缺少 $T_SLEEP"
@@ -258,7 +276,9 @@ internal object QueryPlan {
         out: MutableList<TableSpec>,
         problems: MutableList<String>,
         now: Long,
+        only: Set<RecordType>?,
     ) {
+        if (!wantIn(only, RecordType.BLOOD_OXYGEN)) return
         val actual = byUpper[T_SPO2]
         if (actual == null) {
             problems += "缺少 $T_SPO2"
@@ -284,7 +304,11 @@ internal object QueryPlan {
         out: MutableList<TableSpec>,
         problems: MutableList<String>,
         now: Long,
+        only: Set<RecordType>?,
     ) {
+        val wantW = wantIn(only, RecordType.WEIGHT)
+        val wantH = wantIn(only, RecordType.HEIGHT)
+        if (!wantW && !wantH) return
         val actual = byUpper[T_WEIGHT]
         if (actual == null) {
             problems += "缺少 $T_WEIGHT"
@@ -299,17 +323,21 @@ internal object QueryPlan {
         val idCol = cols.getValue("_ID")
         val order = "ORDER BY CAST($idCol AS INTEGER) DESC LIMIT $MAX_ROWS_BODY"
 
-        out += TableSpec(
-            RecordType.WEIGHT,
-            "SELECT $idCol, ${cols.getValue("WEIGHT")} FROM `$t` " +
-                "WHERE CAST(${cols.getValue("WEIGHT")} AS REAL) > 0 $order",
-        ) { row -> M4Mappers.weightRecords(row, cols, now) }
+        if (wantW) {
+            out += TableSpec(
+                RecordType.WEIGHT,
+                "SELECT $idCol, ${cols.getValue("WEIGHT")} FROM `$t` " +
+                    "WHERE CAST(${cols.getValue("WEIGHT")} AS REAL) > 0 $order",
+            ) { row -> M4Mappers.weightRecords(row, cols, now) }
+        }
 
-        out += TableSpec(
-            RecordType.HEIGHT,
-            "SELECT $idCol, ${cols.getValue("HEIGHT")} FROM `$t` " +
-                "WHERE CAST(${cols.getValue("HEIGHT")} AS REAL) > 0 $order",
-        ) { row -> M4Mappers.heightRecords(row, cols, now) }
+        if (wantH) {
+            out += TableSpec(
+                RecordType.HEIGHT,
+                "SELECT $idCol, ${cols.getValue("HEIGHT")} FROM `$t` " +
+                    "WHERE CAST(${cols.getValue("HEIGHT")} AS REAL) > 0 $order",
+            ) { row -> M4Mappers.heightRecords(row, cols, now) }
+        }
     }
 
     /** 运动：一行一次运动。距离/卡路里不单独写，避免与日汇总重复计入。 */
@@ -319,7 +347,9 @@ internal object QueryPlan {
         out: MutableList<TableSpec>,
         problems: MutableList<String>,
         now: Long,
+        only: Set<RecordType>?,
     ) {
+        if (!wantIn(only, RecordType.EXERCISE_SESSION)) return
         val actual = byUpper[T_SPORT]
         if (actual == null) {
             problems += "缺少 $T_SPORT"

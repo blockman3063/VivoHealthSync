@@ -7,11 +7,17 @@
     <uses-permission android:name="android.permission.health.WRITE_HEALTH_DATA" />
 
     <!-- 本机实测：广播与闹钟都拉不起已退出的进程（cached 应用限制），
-         所以必须用前台服务让进程存续，代价是一条静音通知。 -->
+         所以必须用前台服务让进程存续，代价是一条静音通知。
+         读端在 vivo 健康里，写端必须在主进程，两者只能这样配合。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- M5：同步由「vivo 健康写库」驱动，用户平时不打开本应用，
+         前台服务必须不被系统顺手清掉，所以要电池优化白名单。 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <uses-permission android:name="android.permission.health.READ_HEALTH_DATA" />
 
     <!-- 逐类型写权限。
